@@ -1,17 +1,15 @@
+# app/main.py — final version for Week 1
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from app.core.config import settings
-from app.schemas.user import UserCreate, UserResponse
-from app.schemas.resume import ResumeAnalysisRequest
-from app.api.routes import resume as resume_router 
+from app.api.routes import resume as resume_router
+from app.api.routes import auth as auth_router      # NEW
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="AI-powered resume analysis and job matching system",
+    description="AI-powered resume analysis and job matching",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
 )
 
 app.add_middleware(
@@ -22,57 +20,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(
-    resume_router.router,
-    prefix="/resume",
-    tags=["Resume"]
-)
-
+app.include_router(auth_router.router, prefix="/auth", tags=["Auth"])
+app.include_router(resume_router.router, prefix="/resume", tags=["Resume"])
 
 @app.get("/")
 async def root():
-    return {
-        "message": f"Welcome to {settings.APP_NAME}",
-        "docs": "/docs",
-        "status": "running"
-    }
-
+    return {"message": f"Welcome to {settings.APP_NAME}", "docs": "/docs"}
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "app": settings.APP_NAME,
-        "debug_mode": settings.DEBUG
-    }
-
-
-@app.post(
-    "/test/validate-user",
-    response_model=dict,
-    summary="Test endpoint to see Pydantic validation in action",
-    tags=["Testing"]
-)
-async def test_validation(user: UserCreate):
-    return {
-        "message": "Validation passed!",
-        "received": {
-            "email": user.email,
-            "full_name": user.full_name,
-            "password_length": len(user.password)
-        }
-    }
-
-
-@app.post("/test/validate-resume-request", tags=["Testing"])
-async def test_resume_validation(request: ResumeAnalysisRequest):
-    return {
-        "message": "Resume request valid!",
-        "job_title": request.job_title,
-        "jd_word_count": len(request.job_description.split()),
-    }
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    return {"status": "healthy"}
