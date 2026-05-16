@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.schemas.user import UserCreate, UserResponse
 from app.schemas.resume import ResumeAnalysisRequest
+from app.api.routes import resume as resume_router 
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -19,6 +20,12 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+app.include_router(
+    resume_router.router,
+    prefix="/resume",
+    tags=["Resume"]
 )
 
 
