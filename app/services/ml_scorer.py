@@ -2,7 +2,7 @@
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import tuple
+from typing import Tuple
 import re
 
 
@@ -98,3 +98,13 @@ def calculate_tfidf_score(resume_text: str, job_description: str) -> dict:
         "matched_keywords": matched,
         "missing_keywords": missing,
     }
+    
+# add at the bottom of app/services/ml_scorer.py
+
+def calculate_final_score(tfidf_score: float, semantic_score: float) -> float:
+    """
+    Weighted combination of both scores.
+    Semantic weighted higher — understands meaning not just keywords.
+    """
+    final = (tfidf_score * 0.4) + (semantic_score * 0.6)
+    return round(final, 2)

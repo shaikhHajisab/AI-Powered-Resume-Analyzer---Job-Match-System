@@ -4,6 +4,10 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
 
+from app.services.semantic_scorer import calculate_semantic_score
+from app.services.ml_scorer import calculate_tfidf_score, calculate_final_score
+from datetime import datetime, timezone
+
 from app.db.deps import get_db
 from app.api.deps import get_current_user          # NEW
 from app.models.user import User                    # NEW
@@ -152,3 +156,87 @@ def interpret_score(score: float) -> str:
         return "Weak match — significant gaps between resume and job requirements"
     else:
         return "Poor match — this role may not align with your current resume"
+
+
+@router.post("/{resume_id}/analyze")
+async def analyze_resume(
+    resume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Full analysis pipeline:
+    1. TF-IDF keyword matching score
+    2. Semantic similarity score  
+    3. Combined final score
+    4. Save everything to database
+    """
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == current_user.id
+    ).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if not resume.resume_text or not resume.job_description:
+        raise HTTPException(
+            status_code=400,
+            detail="Resume must have both resume text and job description"
+        )
+
+    # mark as processing
+    resume.status = "processing"
+    db.commit()
+
+    try:
+        # step 1 — TF-IDF
+        tfidf_result = calculate_tfidf_score(
+            resume.resume_text,
+            resume.job_description
+        )
+
+        # step 2 — semantic (HuggingFace API call)
+        semantic_result = calculate_semantic_score(
+            resume.resume_text,
+            resume.job_description
+        )
+
+        # step 3 — combine
+        final = calculate_final_score(
+            tfidf_result["tfidf_score"],
+            semantic_result["semantic_score"]
+        )
+
+        # step 4 — save to database
+        resume.tfidf_score = tfidf_result["tfidf_score"]
+        resume.semantic_score = semantic_result["semantic_score"]
+        resume.final_score = final
+        resume.matched_keywords = tfidf_result["matched_keywords"]
+        resume.missing_keywords = tfidf_result["missing_keywords"]
+        resume.status = "completed"
+        resume.completed_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(resume)
+
+        return {
+            "resume_id": resume.id,
+            "status": "completed",
+            "scores": {
+                "tfidf_score": tfidf_result["tfidf_score"],
+                "semantic_score": semantic_result["semantic_score"],
+                "final_score": final,
+            },
+            "keywords": {
+                "matched": tfidf_result["matched_keywords"],
+                "missing": tfidf_result["missing_keywords"],
+            },
+            "interpretation": interpret_score(final),
+            "completed_at": resume.completed_at,
+        }
+
+    except Exception as e:
+        # if anything fails — mark as failed in DB
+        resume.status = "failed"
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")

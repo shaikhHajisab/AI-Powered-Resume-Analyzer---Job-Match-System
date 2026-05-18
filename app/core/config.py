@@ -5,7 +5,7 @@ from functools import lru_cache
 class Settings(BaseSettings):
     APP_NAME: str = "Resume Analyzer"
     DEBUG: bool = False
-
+    HUGGINGFACE_API_KEY: str = ""
     DATABASE_URL: str
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
