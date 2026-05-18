@@ -9,7 +9,7 @@ from app.api.deps import get_current_user          # NEW
 from app.models.user import User                    # NEW
 from app.models.resume import Resume
 from app.services.pdf_parser import extract_text_from_pdf, validate_pdf_file
-
+from app.services.ml_scorer import calculate_tfidf_score
 router = APIRouter()
 
 
@@ -98,3 +98,57 @@ async def get_resume(
         "text_preview": resume.resume_text[:500] if resume.resume_text else None,
         "created_at": resume.created_at,
     }
+    
+    
+@router.post("/{resume_id}/analyze-tfidf")
+async def analyze_tfidf(
+    resume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run TF-IDF scoring on an uploaded resume"""
+    # fetch resume — make sure it belongs to current user
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == current_user.id
+    ).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if not resume.resume_text or not resume.job_description:
+        raise HTTPException(
+            status_code=400,
+            detail="Resume must have both resume text and job description"
+        )
+
+    # run ML scoring
+    result = calculate_tfidf_score(resume.resume_text, resume.job_description)
+
+    # save scores to database
+    resume.tfidf_score = result["tfidf_score"]
+    resume.matched_keywords = result["matched_keywords"]
+    resume.missing_keywords = result["missing_keywords"]
+    resume.status = "processing"
+    db.commit()
+    db.refresh(resume)
+
+    return {
+        "resume_id": resume.id,
+        "tfidf_score": result["tfidf_score"],
+        "matched_keywords": result["matched_keywords"],
+        "missing_keywords": result["missing_keywords"],
+        "interpretation": interpret_score(result["tfidf_score"])
+    }
+
+
+def interpret_score(score: float) -> str:
+    """Human readable score interpretation"""
+    if score >= 70:
+        return "Strong match — your resume aligns well with this job"
+    elif score >= 50:
+        return "Moderate match — consider adding missing keywords"
+    elif score >= 30:
+        return "Weak match — significant gaps between resume and job requirements"
+    else:
+        return "Poor match — this role may not align with your current resume"
