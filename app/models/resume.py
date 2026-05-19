@@ -29,6 +29,9 @@ class Resume(Base):
     suggestions = Column(JSON, nullable=True)
     similar_jobs = Column(JSON, nullable=True)
     
+    resume_embedding = Column(JSON, nullable=True)
+    jd_embedding = Column(JSON, nullable=True)
+    
     status = Column(String(50), default="pending")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     completed_at = Column(DateTime(timezone=True), nullable=True)

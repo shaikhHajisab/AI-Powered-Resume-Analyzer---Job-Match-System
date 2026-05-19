@@ -86,6 +86,38 @@ def test_unauthorized():
     """no token should get 401"""
     res = requests.post(f"{BASE}/resume/1/analyze")
     print(f"\nNo token → {res.status_code} (expected 401)")
+    
+    
+# add this function and call it at the bottom
+
+def test_caching(token: str, resume_id: int):
+    import time
+
+    print("\n--- Cache Test ---")
+
+    # first call — hits HF API
+    start = time.time()
+    res = requests.post(
+        f"{BASE}/resume/{resume_id}/analyze",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    first_call = time.time() - start
+    data = res.json()
+    print(f"First call:  {first_call:.1f}s | cached={data.get('cached')}")
+
+    # second call — should use cache, much faster
+    start = time.time()
+    res = requests.post(
+        f"{BASE}/resume/{resume_id}/analyze",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    second_call = time.time() - start
+    data = res.json()
+    print(f"Second call: {second_call:.1f}s | cached={data.get('cached')}")
+
+    print(f"Speed improvement: {first_call/second_call:.1f}x faster")
+
+
 
 
 # ── run ──────────────────────────────────────────────────
@@ -102,5 +134,6 @@ if __name__ == "__main__":
     run_tfidf_only(token, resume_id)
     run_full_analysis(token, resume_id)
     test_unauthorized()
+    test_caching(token, resume_id)
 
     print("\n=== Pipeline test complete ===")

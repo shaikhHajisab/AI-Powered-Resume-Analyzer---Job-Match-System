@@ -158,19 +158,20 @@ def interpret_score(score: float) -> str:
         return "Poor match — this role may not align with your current resume"
 
 
+from app.services.semantic_scorer import (
+    get_document_embedding,
+    cosine_similarity_vectors,
+    calculate_semantic_score
+)
+
+
 @router.post("/{resume_id}/analyze")
 async def analyze_resume(
     resume_id: int,
+    force_rerun: bool = False,  # query param — ?force_rerun=true skips cache
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """
-    Full analysis pipeline:
-    1. TF-IDF keyword matching score
-    2. Semantic similarity score  
-    3. Combined final score
-    4. Save everything to database
-    """
     resume = db.query(Resume).filter(
         Resume.id == resume_id,
         Resume.user_id == current_user.id
@@ -182,35 +183,66 @@ async def analyze_resume(
     if not resume.resume_text or not resume.job_description:
         raise HTTPException(
             status_code=400,
-            detail="Resume must have both resume text and job description"
+            detail="Resume needs both text and job description"
         )
 
-    # mark as processing
+    # return cached result if analysis already done
+    # force_rerun=True bypasses this — useful if user edits JD
+    if resume.status == "completed" and not force_rerun:
+        return {
+            "resume_id": resume.id,
+            "status": "completed",
+            "cached": True,
+            "scores": {
+                "tfidf_score": resume.tfidf_score,
+                "semantic_score": resume.semantic_score,
+                "final_score": resume.final_score,
+            },
+            "keywords": {
+                "matched": resume.matched_keywords,
+                "missing": resume.missing_keywords,
+            },
+            "interpretation": interpret_score(resume.final_score),
+            "completed_at": resume.completed_at,
+        }
+
     resume.status = "processing"
     db.commit()
 
     try:
-        # step 1 — TF-IDF
+        # ── TF-IDF ──────────────────────────────────────────
         tfidf_result = calculate_tfidf_score(
             resume.resume_text,
             resume.job_description
         )
 
-        # step 2 — semantic (HuggingFace API call)
-        semantic_result = calculate_semantic_score(
-            resume.resume_text,
-            resume.job_description
-        )
+        # ── Semantic with embedding cache ───────────────────
 
-        # step 3 — combine
+        # use stored embedding if available — skip API call
+        if resume.resume_embedding and not force_rerun:
+            resume_emb = resume.resume_embedding
+        else:
+            resume_emb = get_document_embedding(resume.resume_text)
+            resume.resume_embedding = resume_emb  # cache it
+
+        if resume.jd_embedding and not force_rerun:
+            jd_emb = resume.jd_embedding
+        else:
+            jd_emb = get_document_embedding(resume.job_description)
+            resume.jd_embedding = jd_emb  # cache it
+
+        similarity = cosine_similarity_vectors(resume_emb, jd_emb)
+        semantic_score = round(similarity * 100, 2)
+
+        # ── Final score ──────────────────────────────────────
         final = calculate_final_score(
             tfidf_result["tfidf_score"],
-            semantic_result["semantic_score"]
+            semantic_score
         )
 
-        # step 4 — save to database
+        # ── Save everything ──────────────────────────────────
         resume.tfidf_score = tfidf_result["tfidf_score"]
-        resume.semantic_score = semantic_result["semantic_score"]
+        resume.semantic_score = semantic_score
         resume.final_score = final
         resume.matched_keywords = tfidf_result["matched_keywords"]
         resume.missing_keywords = tfidf_result["missing_keywords"]
@@ -222,9 +254,10 @@ async def analyze_resume(
         return {
             "resume_id": resume.id,
             "status": "completed",
+            "cached": False,
             "scores": {
                 "tfidf_score": tfidf_result["tfidf_score"],
-                "semantic_score": semantic_result["semantic_score"],
+                "semantic_score": semantic_score,
                 "final_score": final,
             },
             "keywords": {
@@ -236,7 +269,6 @@ async def analyze_resume(
         }
 
     except Exception as e:
-        # if anything fails — mark as failed in DB
         resume.status = "failed"
         db.commit()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")

@@ -4,78 +4,112 @@ import requests
 import numpy as np
 from app.core.config import settings
 
-# free model on hugging face — good balance of speed and quality
-# 384 dimensional embeddings
 HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{HF_MODEL}"
 
+# model handles max 256 word pieces comfortably
+# beyond this quality degrades — better to chunk
+MAX_CHARS = 800
+
 
 def get_embedding(text: str) -> list[float]:
-    """
-    Call Hugging Face API to get embedding vector for a text.
-    Returns list of floats (384 numbers).
-    """
+    """Get embedding from HuggingFace API"""
     headers = {"Authorization": f"Bearer {settings.HUGGINGFACE_API_KEY}"}
-
-    # HF feature-extraction expects this format
     payload = {
-        "inputs": text[:512],  # model max token limit — truncate long text
-        "options": {"wait_for_model": True}  # wait if model is cold starting
+        "inputs": text,
+        "options": {"wait_for_model": True}
     }
 
-    response = requests.post(HF_API_URL, headers=headers, json=payload, timeout=30)
+    response = requests.post(
+        HF_API_URL,
+        headers=headers,
+        json=payload,
+        timeout=60
+    )
 
     if response.status_code != 200:
-        raise Exception(f"HuggingFace API error: {response.status_code} {response.text}")
+        raise Exception(f"HF API error {response.status_code}: {response.text}")
 
     embedding = response.json()
 
-    # HF returns nested list for some models — flatten if needed
-    # shape can be (1, 384) or (384,) depending on model
+    # flatten if nested list
     if isinstance(embedding[0], list):
         embedding = embedding[0]
 
     return embedding
 
 
-def cosine_similarity_manual(vec1: list[float], vec2: list[float]) -> float:
+def chunk_text(text: str, chunk_size: int = MAX_CHARS) -> list[str]:
     """
-    Calculate cosine similarity between two vectors.
-    Same math sklearn uses — doing it manually so you understand it.
+    Split long text into overlapping chunks.
+    Overlap ensures skills that fall at a chunk boundary aren't lost.
     """
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    # 200 char overlap between chunks
+    step = chunk_size - 200
+
+    for i in range(0, len(text), step):
+        chunk = text[i: i + chunk_size]
+        if chunk.strip():
+            chunks.append(chunk)
+        # stop if we've covered all text
+        if i + chunk_size >= len(text):
+            break
+
+    return chunks
+
+
+def get_document_embedding(text: str) -> list[float]:
+    """
+    For long documents — chunk, embed each chunk, average the embeddings.
+    Averaging works because embedding space is linear:
+    average of chunk embeddings ≈ embedding of whole document
+    """
+    chunks = chunk_text(text)
+
+    if len(chunks) == 1:
+        return get_embedding(chunks[0])
+
+    # get embedding for each chunk
+    embeddings = []
+    for chunk in chunks[:4]:  # max 4 chunks to stay within HF rate limits
+        emb = get_embedding(chunk)
+        embeddings.append(emb)
+
+    # average all chunk embeddings
+    # np.mean across axis=0 → average each dimension across all chunks
+    averaged = np.mean(embeddings, axis=0).tolist()
+    return averaged
+
+
+def cosine_similarity_vectors(vec1: list[float], vec2: list[float]) -> float:
+    """Cosine similarity between two vectors"""
     a = np.array(vec1)
     b = np.array(vec2)
-
-    # dot product
     dot = np.dot(a, b)
-
-    # magnitudes
-    magnitude_a = np.linalg.norm(a)
-    magnitude_b = np.linalg.norm(b)
-
-    # avoid division by zero
-    if magnitude_a == 0 or magnitude_b == 0:
+    norm = np.linalg.norm(a) * np.linalg.norm(b)
+    if norm == 0:
         return 0.0
-
-    return float(dot / (magnitude_a * magnitude_b))
+    return float(dot / norm)
 
 
 def calculate_semantic_score(resume_text: str, job_description: str) -> dict:
     """
-    Get semantic similarity score between resume and job description.
-    Uses Hugging Face embeddings + cosine similarity.
+    Semantic similarity using chunked embeddings.
+    Handles long resumes properly.
     """
-    # get embeddings for both texts
-    resume_embedding = get_embedding(resume_text[:1000])  # limit text length
-    jd_embedding = get_embedding(job_description[:1000])
+    # get embeddings — chunks handled internally
+    resume_embedding = get_document_embedding(resume_text)
+    jd_embedding = get_document_embedding(job_description)
 
-    # calculate similarity
-    similarity = cosine_similarity_manual(resume_embedding, jd_embedding)
-
-    # convert to 0-100
+    similarity = cosine_similarity_vectors(resume_embedding, jd_embedding)
     score = round(similarity * 100, 2)
 
     return {
         "semantic_score": score,
         "model_used": HF_MODEL,
+        "chunks_used": len(chunk_text(resume_text))
     }
