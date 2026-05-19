@@ -8,10 +8,37 @@ from app.core.config import settings
 from app.api.routes import resume as resume_router
 from app.api.routes import auth as auth_router
 
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from app.core.config import settings
+from app.api.routes import resume as resume_router
+from app.api.routes import auth as auth_router
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # runs on startup
+    print("Starting up...")
+    try:
+        from app.services.vector_store import load_index
+        load_index()
+        print("Vector store ready")
+    except Exception as e:
+        # don't crash app if FAISS fails — just log it
+        print(f"Vector store failed to load: {e}")
+
+    yield  # app runs here
+
+    # runs on shutdown
+    print("Shutting down...")
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="AI-powered resume analysis and job matching",
     version="1.0.0",
+    lifespan=lifespan, 
 )
 
 app.add_middleware(

@@ -7,7 +7,8 @@ from typing import Optional
 from app.services.semantic_scorer import calculate_semantic_score
 from app.services.ml_scorer import calculate_tfidf_score, calculate_final_score
 from datetime import datetime, timezone
-
+from app.services.llm_service import generate_resume_suggestions
+from app.services.vector_store import get_similar_jobs
 from app.db.deps import get_db
 from app.api.deps import get_current_user          # NEW
 from app.models.user import User                    # NEW
@@ -272,3 +273,97 @@ async def analyze_resume(
         resume.status = "failed"
         db.commit()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
+    
+    
+    
+    
+@router.post("/{resume_id}/suggestions")
+async def get_suggestions(
+    resume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate LLM-powered improvement suggestions for a resume"""
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == current_user.id
+    ).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    # must run analysis first so we have scores and keywords
+    if resume.status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail="Run /analyze first before getting suggestions"
+        )
+
+    # return cached suggestions if already generated
+    if resume.suggestions:
+        return {
+            "resume_id": resume.id,
+            "cached": True,
+            "suggestions": resume.suggestions
+        }
+
+    # generate fresh suggestions
+    suggestions = generate_resume_suggestions(
+        resume_text=resume.resume_text,
+        job_description=resume.job_description,
+        matched_keywords=resume.matched_keywords or [],
+        missing_keywords=resume.missing_keywords or [],
+        final_score=resume.final_score or 0
+    )
+
+    # cache in database
+    resume.suggestions = suggestions
+    db.commit()
+
+    return {
+        "resume_id": resume.id,
+        "cached": False,
+        "final_score": resume.final_score,
+        "suggestions": suggestions
+    }
+    
+    
+@router.get("/{resume_id}/similar-jobs")
+async def find_similar_jobs(
+    resume_id: int,
+    top_k: int = 3,  # query param — ?top_k=5 to get more results
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Find jobs similar to the uploaded resume using RAG"""
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == current_user.id
+    ).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if not resume.resume_text:
+        raise HTTPException(status_code=400, detail="No resume text found")
+
+    # check cache
+    if resume.similar_jobs:
+        return {
+            "resume_id": resume.id,
+            "cached": True,
+            "similar_jobs": resume.similar_jobs
+        }
+
+    # search vector store
+    similar = get_similar_jobs(resume.resume_text, top_k=top_k)
+
+    # cache results
+    resume.similar_jobs = similar
+    db.commit()
+
+    return {
+        "resume_id": resume.id,
+        "cached": False,
+        "similar_jobs": similar
+    }
