@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Resume Analyzer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 2rem;
+    }
+
+    .container { max-width: 860px; margin: 0 auto; }
+
+    h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #38bdf8;
+      margin-bottom: 0.4rem;
+    }
+
+    .subtitle { color: #94a3b8; margin-bottom: 2rem; }
+
+    /* auth section */
+    .auth-box {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .auth-box h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 1rem; }
+
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+
+    .tab {
+      padding: 0.4rem 1rem;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 0.85rem;
+      background: #334155;
+      color: #94a3b8;
+    }
+
+    .tab.active { background: #38bdf8; color: #0f172a; font-weight: 600; }
+
+    .form-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.75rem; }
+
+    input, textarea, select {
+      background: #0f172a;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      color: #e2e8f0;
+      padding: 0.6rem 0.9rem;
+      font-size: 0.9rem;
+      width: 100%;
+      outline: none;
+      transition: border 0.2s;
+    }
+
+    input:focus, textarea:focus { border-color: #38bdf8; }
+
+    textarea { resize: vertical; min-height: 100px; }
+
+    button.primary {
+      background: #38bdf8;
+      color: #0f172a;
+      border: none;
+      border-radius: 8px;
+      padding: 0.65rem 1.4rem;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button.primary:hover { background: #7dd3fc; }
+    button.primary:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+
+    /* upload section */
+    .upload-box {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      display: none;
+    }
+
+    .upload-box h2 { color: #38bdf8; margin-bottom: 1rem; }
+
+    .file-drop {
+      border: 2px dashed #334155;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      color: #64748b;
+      margin-bottom: 1rem;
+      cursor: pointer;
+      transition: border 0.2s;
+    }
+
+    .file-drop:hover, .file-drop.dragover { border-color: #38bdf8; color: #38bdf8; }
+    .file-drop.has-file { border-color: #22c55e; color: #22c55e; }
+
+    /* results */
+    .results-box {
+      background: #1e293b;
+      border-radius: 12px;
+      padding: 1.5rem;
+      display: none;
+    }
+
+    .score-row {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+      flex-wrap: wrap;
+    }
+
+    .score-card {
+      flex: 1;
+      min-width: 150px;
+      background: #0f172a;
+      border-radius: 10px;
+      padding: 1rem;
+      text-align: center;
+    }
+
+    .score-card .label { font-size: 0.75rem; color: #64748b; margin-bottom: 0.4rem; }
+    .score-card .value { font-size: 2rem; font-weight: 700; }
+    .score-card .value.high { color: #22c55e; }
+    .score-card .value.mid  { color: #f59e0b; }
+    .score-card .value.low  { color: #ef4444; }
+
+    .section-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #94a3b8;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin: 1.25rem 0 0.6rem;
+    }
+
+    .tag {
+      display: inline-block;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      margin: 0.2rem;
+    }
+
+    .tag.green { background: #14532d; color: #86efac; }
+    .tag.red   { background: #450a0a; color: #fca5a5; }
+
+    .suggestion {
+      background: #0f172a;
+      border-left: 3px solid #38bdf8;
+      border-radius: 0 8px 8px 0;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.6rem;
+      font-size: 0.88rem;
+    }
+
+    .suggestion .cat {
+      font-size: 0.72rem;
+      color: #38bdf8;
+      font-weight: 600;
+      margin-bottom: 0.3rem;
+    }
+
+    .job-card {
+      background: #0f172a;
+      border-radius: 8px;
+      padding: 0.9rem 1rem;
+      margin-bottom: 0.6rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .job-card .job-info .title { font-weight: 600; font-size: 0.9rem; }
+    .job-card .job-info .meta { font-size: 0.78rem; color: #64748b; margin-top: 0.2rem; }
+    .job-card .sim { font-size: 0.85rem; color: #38bdf8; font-weight: 600; }
+
+    .status-bar {
+      background: #0f172a;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1rem;
+      font-size: 0.85rem;
+      color: #94a3b8;
+      display: none;
+    }
+
+    .status-bar.visible { display: block; }
+    .error-msg { color: #ef4444; font-size: 0.85rem; margin-top: 0.5rem; }
+    .user-badge {
+      background: #1e293b;
+      border-radius: 8px;
+      padding: 0.5rem 1rem;
+      font-size: 0.82rem;
+      color: #94a3b8;
+      margin-bottom: 1rem;
+      display: none;
+    }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>Resume Analyzer</h1>
+  <p class="subtitle">AI-powered resume scoring, gap analysis and job matching</p>
+
+  <div class="user-badge" id="userBadge">
+    Logged in as <strong id="userEmail"></strong>
+    &nbsp;·&nbsp;
+    <span style="cursor:pointer;color:#38bdf8" onclick="logout()">Logout</span>
+  </div>
+
+  <!-- AUTH BOX -->
+  <div class="auth-box" id="authBox">
+    <h2>Sign in to continue</h2>
+    <div class="tabs">
+      <button class="tab active" onclick="switchTab('login')">Login</button>
+      <button class="tab" onclick="switchTab('register')">Register</button>
+    </div>
+
+    <div id="loginForm">
+      <div class="form-row">
+        <input type="email" id="loginEmail" placeholder="Email" />
+      </div>
+      <div class="form-row">
+        <input type="password" id="loginPassword" placeholder="Password" />
+      </div>
+      <button class="primary" onclick="login()">Login</button>
+      <div class="error-msg" id="loginError"></div>
+    </div>
+
+    <div id="registerForm" style="display:none">
+      <div class="form-row">
+        <input type="text" id="regName" placeholder="Full Name" />
+      </div>
+      <div class="form-row">
+        <input type="email" id="regEmail" placeholder="Email" />
+      </div>
+      <div class="form-row">
+        <input type="password" id="regPassword" placeholder="Password (min 8 chars, 1 uppercase)" />
+      </div>
+      <button class="primary" onclick="register()">Create Account</button>
+      <div class="error-msg" id="registerError"></div>
+    </div>
+  </div>
+
+  <!-- UPLOAD BOX -->
+  <div class="upload-box" id="uploadBox">
+    <h2>Upload Resume</h2>
+
+    <div class="file-drop" id="fileDrop" onclick="document.getElementById('fileInput').click()">
+      <div id="fileDropText">Click to select PDF or drag and drop</div>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf" style="display:none" onchange="handleFile(this)"/>
+
+    <div class="form-row">
+      <input type="text" id="jobTitle" placeholder="Job Title (optional)" />
+    </div>
+    <div class="form-row">
+      <textarea id="jobDescription" placeholder="Paste the job description here (min 50 characters)"></textarea>
+    </div>
+
+    <button class="primary" id="analyzeBtn" onclick="uploadAndAnalyze()" disabled>
+      Analyze Resume
+    </button>
+    <div class="error-msg" id="uploadError"></div>
+  </div>
+
+  <!-- STATUS -->
+  <div class="status-bar" id="statusBar"></div>
+
+  <!-- RESULTS BOX -->
+  <div class="results-box" id="resultsBox">
+    <h2 style="color:#38bdf8;margin-bottom:1.25rem">Analysis Results</h2>
+
+    <div class="score-row">
+      <div class="score-card">
+        <div class="label">Final Score</div>
+        <div class="value" id="finalScore">—</div>
+      </div>
+      <div class="score-card">
+        <div class="label">TF-IDF</div>
+        <div class="value" id="tfidfScore">—</div>
+      </div>
+      <div class="score-card">
+        <div class="label">Semantic</div>
+        <div class="value" id="semanticScore">—</div>
+      </div>
+    </div>
+
+    <div id="interpretation" style="color:#94a3b8;font-size:0.88rem;margin-bottom:1rem;"></div>
+
+    <div class="section-title">Matched Keywords</div>
+    <div id="matchedKeywords"></div>
+
+    <div class="section-title">Missing Keywords</div>
+    <div id="missingKeywords"></div>
+
+    <div class="section-title">Improvement Suggestions</div>
+    <div id="suggestions"></div>
+
+    <div class="section-title">Similar Jobs</div>
+    <div id="similarJobs"></div>
+
+    <button class="primary" style="margin-top:1.5rem" onclick="resetForm()">
+      Analyze Another Resume
+    </button>
+  </div>
+</div>
+
+<script>
+  // ── config ─────────────────────────────────────────────
+  const API = 'http://localhost:8000'  // change to your Render URL after deploy
+  let token = localStorage.getItem('token')
+  let selectedFile = null
+
+  // ── init ───────────────────────────────────────────────
+  window.onload = () => {
+    if (token) showUploadBox()
+  }
+
+  // ── auth ───────────────────────────────────────────────
+  function switchTab(tab) {
+    document.getElementById('loginForm').style.display    = tab === 'login'    ? '' : 'none'
+    document.getElementById('registerForm').style.display = tab === 'register' ? '' : 'none'
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      t.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'register' && i === 1))
+    })
+  }
+
+  async function login() {
+    const email = document.getElementById('loginEmail').value
+    const pass  = document.getElementById('loginPassword').value
+    document.getElementById('loginError').textContent = ''
+
+    const res = await fetch(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(email)}&password=${encodeURIComponent(pass)}`
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      document.getElementById('loginError').textContent = data.detail || 'Login failed'
+      return
+    }
+
+    token = data.access_token
+    localStorage.setItem('token', token)
+    localStorage.setItem('userEmail', email)
+    showUploadBox()
+  }
+
+  async function register() {
+    const name  = document.getElementById('regName').value
+    const email = document.getElementById('regEmail').value
+    const pass  = document.getElementById('regPassword').value
+    document.getElementById('registerError').textContent = ''
+
+    const res = await fetch(`${API}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name: name, email, password: pass })
+    })
+
+    const data = await res.json()
+    if (!res.ok) {
+      document.getElementById('registerError').textContent =
+        data.detail || 'Registration failed'
+      return
+    }
+
+    // auto login after register
+    document.getElementById('loginEmail').value    = email
+    document.getElementById('loginPassword').value = pass
+    switchTab('login')
+    await login()
+  }
+
+  function logout() {
+    token = null
+    localStorage.removeItem('token')
+    localStorage.removeItem('userEmail')
+    document.getElementById('authBox').style.display    = ''
+    document.getElementById('uploadBox').style.display  = 'none'
+    document.getElementById('resultsBox').style.display = 'none'
+    document.getElementById('userBadge').style.display  = 'none'
+  }
+
+  function showUploadBox() {
+    document.getElementById('authBox').style.display   = 'none'
+    document.getElementById('uploadBox').style.display = ''
+    const email = localStorage.getItem('userEmail') || ''
+    document.getElementById('userEmail').textContent   = email
+    document.getElementById('userBadge').style.display = ''
+  }
+
+  // ── file handling ──────────────────────────────────────
+  function handleFile(input) {
+    const file = input.files[0]
+    if (!file) return
+    selectedFile = file
+    const drop = document.getElementById('fileDrop')
+    drop.classList.add('has-file')
+    document.getElementById('fileDropText').textContent = `Selected: ${file.name}`
+    document.getElementById('analyzeBtn').disabled = false
+  }
+
+  // drag and drop
+  const drop = document.getElementById('fileDrop')
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover') })
+  drop.addEventListener('dragleave', () => drop.classList.remove('dragover'))
+  drop.addEventListener('drop', e => {
+    e.preventDefault()
+    drop.classList.remove('dragover')
+    const file = e.dataTransfer.files[0]
+    if (file && file.type === 'application/pdf') {
+      selectedFile = file
+      drop.classList.add('has-file')
+      document.getElementById('fileDropText').textContent = `Selected: ${file.name}`
+      document.getElementById('analyzeBtn').disabled = false
+    }
+  })
+
+  // ── main flow ──────────────────────────────────────────
+  async function uploadAndAnalyze() {
+    if (!selectedFile) return
+
+    const jd = document.getElementById('jobDescription').value
+    if (jd.length < 50) {
+      document.getElementById('uploadError').textContent =
+        'Job description must be at least 50 characters'
+      return
+    }
+
+    document.getElementById('uploadError').textContent = ''
+    document.getElementById('analyzeBtn').disabled = true
+    setStatus('Uploading resume...')
+
+    // step 1 — upload
+    const form = new FormData()
+    form.append('file', selectedFile)
+    form.append('job_description', jd)
+    form.append('job_title', document.getElementById('jobTitle').value)
+
+    const uploadRes = await fetch(`${API}/resume/upload`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: form
+    })
+
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json()
+      document.getElementById('uploadError').textContent = err.detail || 'Upload failed'
+      document.getElementById('analyzeBtn').disabled = false
+      setStatus('')
+      return
+    }
+
+    const uploadData = await uploadRes.json()
+    const resumeId = uploadData.resume_id
+    setStatus('Running AI analysis (this takes 15-30 seconds on first run)...')
+
+    // step 2 — full analysis
+    const analysisRes = await fetch(`${API}/resume/${resumeId}/full-analysis`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` }
+    })
+
+    const analysis = await analysisRes.json()
+
+    if (!analysisRes.ok) {
+      document.getElementById('uploadError').textContent =
+        analysis.detail || 'Analysis failed'
+      document.getElementById('analyzeBtn').disabled = false
+      setStatus('')
+      return
+    }
+
+    setStatus('')
+    showResults(analysis)
+  }
+
+  function showResults(data) {
+    document.getElementById('uploadBox').style.display  = 'none'
+    document.getElementById('resultsBox').style.display = ''
+
+    // scores
+    setScore('finalScore',    data.scores.final_score)
+    setScore('tfidfScore',    data.scores.tfidf_score)
+    setScore('semanticScore', data.scores.semantic_score)
+    document.getElementById('interpretation').textContent = data.scores.interpretation
+
+    // keywords
+    const matched = document.getElementById('matchedKeywords')
+    matched.innerHTML = (data.keywords.matched || [])
+      .map(k => `<span class="tag green">${k}</span>`).join('') || '<span style="color:#64748b">None found</span>'
+
+    const missing = document.getElementById('missingKeywords')
+    missing.innerHTML = (data.keywords.missing || [])
+      .map(k => `<span class="tag red">${k}</span>`).join('') || '<span style="color:#64748b">None — great match!</span>'
+
+    // suggestions
+    const sug = document.getElementById('suggestions')
+    sug.innerHTML = (data.suggestions || []).map(s => `
+      <div class="suggestion">
+        <div class="cat">${s.category} · ${s.priority} priority</div>
+        <div>${s.suggestion}</div>
+      </div>
+    `).join('') || '<span style="color:#64748b">No suggestions generated</span>'
+
+    // similar jobs
+    const jobs = document.getElementById('similarJobs')
+    jobs.innerHTML = (data.similar_jobs || []).map(j => `
+      <div class="job-card">
+        <div class="job-info">
+          <div class="title">${j.title}</div>
+          <div class="meta">${j.company} · ${j.location}</div>
+        </div>
+        <div class="sim">${j.similarity_score}% match</div>
+      </div>
+    `).join('') || '<span style="color:#64748b">No similar jobs found</span>'
+  }
+
+  function setScore(id, value) {
+    const el = document.getElementById(id)
+    el.textContent = value ? `${value}` : '—'
+    el.className = 'value ' + (value >= 70 ? 'high' : value >= 45 ? 'mid' : 'low')
+  }
+
+  function setStatus(msg) {
+    const bar = document.getElementById('statusBar')
+    bar.textContent = msg
+    bar.classList.toggle('visible', !!msg)
+  }
+
+  function resetForm() {
+    selectedFile = null
+    document.getElementById('fileInput').value = ''
+    document.getElementById('jobDescription').value = ''
+    document.getElementById('jobTitle').value = ''
+    document.getElementById('fileDrop').classList.remove('has-file')
+    document.getElementById('fileDropText').textContent = 'Click to select PDF or drag and drop'
+    document.getElementById('analyzeBtn').disabled = true
+    document.getElementById('resultsBox').style.display = 'none'
+    document.getElementById('uploadBox').style.display  = ''
+  }
+</script>
+</body>
+</html>

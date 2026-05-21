@@ -4,4 +4,10 @@ __pycache__/
 *.pyc
 .env
 *.db
+.env
+.git/
+tests/
+*.md
 .DS_Store
+app/data/jobs.index
+app/data/jobs_meta.json

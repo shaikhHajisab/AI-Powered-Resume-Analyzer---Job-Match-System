@@ -367,3 +367,138 @@ async def find_similar_jobs(
         "cached": False,
         "similar_jobs": similar
     }
+    
+
+
+@router.post("/{resume_id}/full-analysis")
+async def full_analysis(
+    resume_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Runs everything in one call:
+    1. TF-IDF scoring
+    2. Semantic scoring  
+    3. LLM suggestions
+    4. Similar jobs via RAG
+    Returns complete analysis result.
+    """
+    resume = db.query(Resume).filter(
+        Resume.id == resume_id,
+        Resume.user_id == current_user.id
+    ).first()
+
+    if not resume:
+        raise HTTPException(status_code=404, detail="Resume not found")
+
+    if not resume.resume_text or not resume.job_description:
+        raise HTTPException(status_code=400, detail="Resume needs text and job description")
+
+    # return fully cached result if everything is done
+    if (resume.status == "completed" and
+        resume.suggestions and
+        resume.similar_jobs):
+        return build_full_response(resume, cached=True)
+
+    resume.status = "processing"
+    db.commit()
+
+    errors = []  # collect non-fatal errors — partial results better than nothing
+
+    try:
+        # ── step 1: TF-IDF ──────────────────────────────────
+        tfidf_result = calculate_tfidf_score(
+            resume.resume_text,
+            resume.job_description
+        )
+
+        # ── step 2: semantic embeddings ──────────────────────
+        if resume.resume_embedding:
+            resume_emb = resume.resume_embedding
+        else:
+            resume_emb = get_document_embedding(resume.resume_text)
+            resume.resume_embedding = resume_emb
+
+        if resume.jd_embedding:
+            jd_emb = resume.jd_embedding
+        else:
+            jd_emb = get_document_embedding(resume.job_description)
+            resume.jd_embedding = jd_emb
+
+        similarity = cosine_similarity_vectors(resume_emb, jd_emb)
+        semantic_score = round(similarity * 100, 2)
+        final = calculate_final_score(tfidf_result["tfidf_score"], semantic_score)
+
+        # save scores
+        resume.tfidf_score = tfidf_result["tfidf_score"]
+        resume.semantic_score = semantic_score
+        resume.final_score = final
+        resume.matched_keywords = tfidf_result["matched_keywords"]
+        resume.missing_keywords = tfidf_result["missing_keywords"]
+        db.commit()
+
+    except Exception as e:
+        resume.status = "failed"
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"Scoring failed: {str(e)}")
+
+    # ── step 3: LLM suggestions (non-fatal if fails) ─────────
+    if not resume.suggestions:
+        try:
+            suggestions = generate_resume_suggestions(
+                resume_text=resume.resume_text,
+                job_description=resume.job_description,
+                matched_keywords=resume.matched_keywords or [],
+                missing_keywords=resume.missing_keywords or [],
+                final_score=resume.final_score
+            )
+            resume.suggestions = suggestions
+            db.commit()
+        except Exception as e:
+            errors.append(f"LLM suggestions unavailable: {str(e)}")
+
+    # ── step 4: similar jobs via RAG (non-fatal if fails) ────
+    if not resume.similar_jobs:
+        try:
+            similar = get_similar_jobs(resume.resume_text, top_k=3)
+            resume.similar_jobs = similar
+            db.commit()
+        except Exception as e:
+            errors.append(f"Similar jobs unavailable: {str(e)}")
+
+    # mark complete
+    resume.status = "completed"
+    resume.completed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(resume)
+
+    response = build_full_response(resume, cached=False)
+    if errors:
+        response["warnings"] = errors  # tell frontend what partially failed
+
+    return response
+
+
+def build_full_response(resume, cached: bool) -> dict:
+    """Build consistent response structure"""
+    return {
+        "resume_id": resume.id,
+        "filename": resume.filename,
+        "job_title": resume.job_title,
+        "status": resume.status,
+        "cached": cached,
+        "scores": {
+            "tfidf_score": resume.tfidf_score,
+            "semantic_score": resume.semantic_score,
+            "final_score": resume.final_score,
+            "interpretation": interpret_score(resume.final_score or 0),
+        },
+        "keywords": {
+            "matched": resume.matched_keywords or [],
+            "missing": resume.missing_keywords or [],
+        },
+        "suggestions": resume.suggestions or [],
+        "similar_jobs": resume.similar_jobs or [],
+        "completed_at": resume.completed_at,
+    }

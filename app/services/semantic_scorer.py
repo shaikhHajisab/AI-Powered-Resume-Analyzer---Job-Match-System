@@ -5,7 +5,7 @@ import numpy as np
 from app.core.config import settings
 
 HF_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-HF_API_URL = f"https://api-inference.huggingface.co/pipeline/feature-extraction/{HF_MODEL}"
+HF_API_URL = f"https://api-inference.huggingface.co/models/sentence-transformers/all-MiniLM-L6-v2"
 
 # model handles max 256 word pieces comfortably
 # beyond this quality degrades — better to chunk
