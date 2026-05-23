@@ -1,21 +1,57 @@
-# app/api/routes/resume.py — updated version
-
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Optional
-
-from app.services.semantic_scorer import calculate_semantic_score
-from app.services.ml_scorer import calculate_tfidf_score, calculate_final_score
 from datetime import datetime, timezone
-from app.services.llm_service import generate_resume_suggestions
-from app.services.vector_store import get_similar_jobs
+
 from app.db.deps import get_db
-from app.api.deps import get_current_user          # NEW
-from app.models.user import User                    # NEW
+from app.api.deps import get_current_user
+from app.models.user import User
 from app.models.resume import Resume
 from app.services.pdf_parser import extract_text_from_pdf, validate_pdf_file
-from app.services.ml_scorer import calculate_tfidf_score
+from app.services.ml_scorer import calculate_tfidf_score, calculate_final_score
+from app.services.semantic_scorer import (
+    get_document_embedding,
+    cosine_similarity_vectors,
+    calculate_semantic_score
+)
+from app.services.llm_service import generate_resume_suggestions
+from app.services.vector_store import get_similar_jobs
+
 router = APIRouter()
+
+def interpret_score(score: float) -> str:
+    """Human readable score interpretation"""
+    if score >= 70:
+        return "Strong match — your resume aligns well with this job"
+    elif score >= 50:
+        return "Moderate match — consider adding missing keywords"
+    elif score >= 30:
+        return "Weak match — significant gaps between resume and job requirements"
+    else:
+        return "Poor match — this role may not align with your current resume"
+
+def build_full_response(resume, cached: bool) -> dict:
+    """Build consistent response structure"""
+    return {
+        "resume_id": resume.id,
+        "filename": resume.filename,
+        "job_title": resume.job_title,
+        "status": resume.status,
+        "cached": cached,
+        "scores": {
+            "tfidf_score": resume.tfidf_score,
+            "semantic_score": resume.semantic_score,
+            "final_score": resume.final_score,
+            "interpretation": interpret_score(resume.final_score or 0),
+        },
+        "keywords": {
+            "matched": resume.matched_keywords or [],
+            "missing": resume.missing_keywords or [],
+        },
+        "suggestions": resume.suggestions or [],
+        "similar_jobs": resume.similar_jobs or [],
+        "completed_at": resume.completed_at,
+    }
 
 
 @router.post("/upload")
@@ -24,19 +60,18 @@ async def upload_resume(
     job_description: str = Form(...),
     job_title: Optional[str] = Form(None),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),  # NEW — requires valid token
+    current_user: User = Depends(get_current_user),
 ):
     validate_pdf_file(filename=file.filename, file_size_bytes=file.size or 0)
 
     file_bytes = await file.read()
-
     if len(file_bytes) > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File too large. Maximum 5MB.")
 
     resume_text = extract_text_from_pdf(file_bytes)
 
     resume = Resume(
-        user_id=current_user.id,  # FIXED — no longer hardcoded
+        user_id=current_user.id,
         filename=file.filename,
         resume_text=resume_text,
         job_description=job_description,
@@ -89,7 +124,7 @@ async def get_resume(
 ):
     resume = db.query(Resume).filter(
         Resume.id == resume_id,
-        Resume.user_id == current_user.id  # users can only see their own resumes
+        Resume.user_id == current_user.id
     ).first()
 
     if not resume:
@@ -103,8 +138,8 @@ async def get_resume(
         "text_preview": resume.resume_text[:500] if resume.resume_text else None,
         "created_at": resume.created_at,
     }
-    
-    
+
+
 @router.post("/{resume_id}/analyze-tfidf")
 async def analyze_tfidf(
     resume_id: int,
@@ -112,7 +147,6 @@ async def analyze_tfidf(
     current_user: User = Depends(get_current_user),
 ):
     """Run TF-IDF scoring on an uploaded resume"""
-    # fetch resume — make sure it belongs to current user
     resume = db.query(Resume).filter(
         Resume.id == resume_id,
         Resume.user_id == current_user.id
@@ -127,10 +161,8 @@ async def analyze_tfidf(
             detail="Resume must have both resume text and job description"
         )
 
-    # run ML scoring
     result = calculate_tfidf_score(resume.resume_text, resume.job_description)
 
-    # save scores to database
     resume.tfidf_score = result["tfidf_score"]
     resume.matched_keywords = result["matched_keywords"]
     resume.missing_keywords = result["missing_keywords"]
@@ -147,32 +179,14 @@ async def analyze_tfidf(
     }
 
 
-def interpret_score(score: float) -> str:
-    """Human readable score interpretation"""
-    if score >= 70:
-        return "Strong match — your resume aligns well with this job"
-    elif score >= 50:
-        return "Moderate match — consider adding missing keywords"
-    elif score >= 30:
-        return "Weak match — significant gaps between resume and job requirements"
-    else:
-        return "Poor match — this role may not align with your current resume"
-
-
-from app.services.semantic_scorer import (
-    get_document_embedding,
-    cosine_similarity_vectors,
-    calculate_semantic_score
-)
-
-
 @router.post("/{resume_id}/analyze")
 async def analyze_resume(
     resume_id: int,
-    force_rerun: bool = False,  # query param — ?force_rerun=true skips cache
+    force_rerun: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    """Run full score analysis (TF-IDF + Semantic)"""
     resume = db.query(Resume).filter(
         Resume.id == resume_id,
         Resume.user_id == current_user.id
@@ -187,8 +201,6 @@ async def analyze_resume(
             detail="Resume needs both text and job description"
         )
 
-    # return cached result if analysis already done
-    # force_rerun=True bypasses this — useful if user edits JD
     if resume.status == "completed" and not force_rerun:
         return {
             "resume_id": resume.id,
@@ -211,37 +223,31 @@ async def analyze_resume(
     db.commit()
 
     try:
-        # ── TF-IDF ──────────────────────────────────────────
         tfidf_result = calculate_tfidf_score(
             resume.resume_text,
             resume.job_description
         )
 
-        # ── Semantic with embedding cache ───────────────────
-
-        # use stored embedding if available — skip API call
         if resume.resume_embedding and not force_rerun:
             resume_emb = resume.resume_embedding
         else:
             resume_emb = get_document_embedding(resume.resume_text)
-            resume.resume_embedding = resume_emb  # cache it
+            resume.resume_embedding = resume_emb
 
         if resume.jd_embedding and not force_rerun:
             jd_emb = resume.jd_embedding
         else:
             jd_emb = get_document_embedding(resume.job_description)
-            resume.jd_embedding = jd_emb  # cache it
+            resume.jd_embedding = jd_emb
 
         similarity = cosine_similarity_vectors(resume_emb, jd_emb)
         semantic_score = round(similarity * 100, 2)
 
-        # ── Final score ──────────────────────────────────────
         final = calculate_final_score(
             tfidf_result["tfidf_score"],
             semantic_score
         )
 
-        # ── Save everything ──────────────────────────────────
         resume.tfidf_score = tfidf_result["tfidf_score"]
         resume.semantic_score = semantic_score
         resume.final_score = final
@@ -273,10 +279,8 @@ async def analyze_resume(
         resume.status = "failed"
         db.commit()
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
-    
-    
-    
-    
+
+
 @router.post("/{resume_id}/suggestions")
 async def get_suggestions(
     resume_id: int,
@@ -292,14 +296,12 @@ async def get_suggestions(
     if not resume:
         raise HTTPException(status_code=404, detail="Resume not found")
 
-    # must run analysis first so we have scores and keywords
     if resume.status != "completed":
         raise HTTPException(
             status_code=400,
             detail="Run /analyze first before getting suggestions"
         )
 
-    # return cached suggestions if already generated
     if resume.suggestions:
         return {
             "resume_id": resume.id,
@@ -307,31 +309,32 @@ async def get_suggestions(
             "suggestions": resume.suggestions
         }
 
-    # generate fresh suggestions
-    suggestions = generate_resume_suggestions(
-        resume_text=resume.resume_text,
-        job_description=resume.job_description,
-        matched_keywords=resume.matched_keywords or [],
-        missing_keywords=resume.missing_keywords or [],
-        final_score=resume.final_score or 0
-    )
+    try:
+        suggestions = generate_resume_suggestions(
+            resume_text=resume.resume_text,
+            job_description=resume.job_description,
+            matched_keywords=resume.matched_keywords or [],
+            missing_keywords=resume.missing_keywords or [],
+            final_score=resume.final_score or 0
+        )
 
-    # cache in database
-    resume.suggestions = suggestions
-    db.commit()
+        resume.suggestions = suggestions
+        db.commit()
 
-    return {
-        "resume_id": resume.id,
-        "cached": False,
-        "final_score": resume.final_score,
-        "suggestions": suggestions
-    }
-    
-    
+        return {
+            "resume_id": resume.id,
+            "cached": False,
+            "final_score": resume.final_score,
+            "suggestions": suggestions
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"LLM suggestions unavailable: {str(e)}")
+
+
 @router.get("/{resume_id}/similar-jobs")
 async def find_similar_jobs(
     resume_id: int,
-    top_k: int = 3,  # query param — ?top_k=5 to get more results
+    top_k: int = 3,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -347,7 +350,6 @@ async def find_similar_jobs(
     if not resume.resume_text:
         raise HTTPException(status_code=400, detail="No resume text found")
 
-    # check cache
     if resume.similar_jobs:
         return {
             "resume_id": resume.id,
@@ -355,19 +357,19 @@ async def find_similar_jobs(
             "similar_jobs": resume.similar_jobs
         }
 
-    # search vector store
-    similar = get_similar_jobs(resume.resume_text, top_k=top_k)
+    try:
+        similar = get_similar_jobs(resume.resume_text, top_k=top_k)
 
-    # cache results
-    resume.similar_jobs = similar
-    db.commit()
+        resume.similar_jobs = similar
+        db.commit()
 
-    return {
-        "resume_id": resume.id,
-        "cached": False,
-        "similar_jobs": similar
-    }
-    
+        return {
+            "resume_id": resume.id,
+            "cached": False,
+            "similar_jobs": similar
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Similar jobs unavailable: {str(e)}")
 
 
 @router.post("/{resume_id}/full-analysis")
@@ -377,12 +379,7 @@ async def full_analysis(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Runs everything in one call:
-    1. TF-IDF scoring
-    2. Semantic scoring  
-    3. LLM suggestions
-    4. Similar jobs via RAG
-    Returns complete analysis result.
+    Runs everything in one call: TF-IDF, Semantic, LLM, and RAG.
     """
     resume = db.query(Resume).filter(
         Resume.id == resume_id,
@@ -395,7 +392,6 @@ async def full_analysis(
     if not resume.resume_text or not resume.job_description:
         raise HTTPException(status_code=400, detail="Resume needs text and job description")
 
-    # return fully cached result if everything is done
     if (resume.status == "completed" and
         resume.suggestions and
         resume.similar_jobs):
@@ -404,16 +400,14 @@ async def full_analysis(
     resume.status = "processing"
     db.commit()
 
-    errors = []  # collect non-fatal errors — partial results better than nothing
+    errors = []
 
     try:
-        # ── step 1: TF-IDF ──────────────────────────────────
         tfidf_result = calculate_tfidf_score(
             resume.resume_text,
             resume.job_description
         )
 
-        # ── step 2: semantic embeddings ──────────────────────
         if resume.resume_embedding:
             resume_emb = resume.resume_embedding
         else:
@@ -430,7 +424,6 @@ async def full_analysis(
         semantic_score = round(similarity * 100, 2)
         final = calculate_final_score(tfidf_result["tfidf_score"], semantic_score)
 
-        # save scores
         resume.tfidf_score = tfidf_result["tfidf_score"]
         resume.semantic_score = semantic_score
         resume.final_score = final
@@ -443,7 +436,6 @@ async def full_analysis(
         db.commit()
         raise HTTPException(status_code=500, detail=f"Scoring failed: {str(e)}")
 
-    # ── step 3: LLM suggestions (non-fatal if fails) ─────────
     if not resume.suggestions:
         try:
             suggestions = generate_resume_suggestions(
@@ -458,7 +450,6 @@ async def full_analysis(
         except Exception as e:
             errors.append(f"LLM suggestions unavailable: {str(e)}")
 
-    # ── step 4: similar jobs via RAG (non-fatal if fails) ────
     if not resume.similar_jobs:
         try:
             similar = get_similar_jobs(resume.resume_text, top_k=3)
@@ -467,7 +458,6 @@ async def full_analysis(
         except Exception as e:
             errors.append(f"Similar jobs unavailable: {str(e)}")
 
-    # mark complete
     resume.status = "completed"
     resume.completed_at = datetime.now(timezone.utc)
     db.commit()
@@ -475,30 +465,6 @@ async def full_analysis(
 
     response = build_full_response(resume, cached=False)
     if errors:
-        response["warnings"] = errors  # tell frontend what partially failed
+        response["warnings"] = errors
 
     return response
-
-
-def build_full_response(resume, cached: bool) -> dict:
-    """Build consistent response structure"""
-    return {
-        "resume_id": resume.id,
-        "filename": resume.filename,
-        "job_title": resume.job_title,
-        "status": resume.status,
-        "cached": cached,
-        "scores": {
-            "tfidf_score": resume.tfidf_score,
-            "semantic_score": resume.semantic_score,
-            "final_score": resume.final_score,
-            "interpretation": interpret_score(resume.final_score or 0),
-        },
-        "keywords": {
-            "matched": resume.matched_keywords or [],
-            "missing": resume.missing_keywords or [],
-        },
-        "suggestions": resume.suggestions or [],
-        "similar_jobs": resume.similar_jobs or [],
-        "completed_at": resume.completed_at,
-    }

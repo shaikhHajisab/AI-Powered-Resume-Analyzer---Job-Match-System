@@ -1,4 +1,3 @@
-# app/api/routes/auth.py
 from app.api.deps import get_current_user
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,7 +16,6 @@ router = APIRouter()
 
 @router.post("/register", response_model=UserResponse, status_code=201)
 async def register(user_data: UserCreate, db: Session = Depends(get_db)):
-    # check if email already exists
     existing = db.query(User).filter(User.email == user_data.email).first()
     if existing:
         raise HTTPException(
@@ -25,7 +23,6 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
             detail="Email already registered"
         )
 
-    # create user with HASHED password — never store plain text
     user = User(
         email=user_data.email,
         hashed_password=hash_password(user_data.password),
@@ -35,22 +32,16 @@ async def register(user_data: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
 
-    return user  # Pydantic UserResponse schema strips out hashed_password
+    return user
 
 
 @router.post("/login", response_model=Token)
 async def login(
-    # OAuth2PasswordRequestForm is a FastAPI built-in
-    # It expects form fields: username + password (not JSON)
-    # This is the OAuth2 standard — username field holds the email
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
 ):
-    # find user by email (form_data.username holds the email)
     user = db.query(User).filter(User.email == form_data.username).first()
 
-    # same error for "user not found" and "wrong password"
-    # never tell attackers which one failed — that's information leakage
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -58,7 +49,6 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # create token with user_id in payload
     token = create_access_token(
         data={"user_id": user.id},
         expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)

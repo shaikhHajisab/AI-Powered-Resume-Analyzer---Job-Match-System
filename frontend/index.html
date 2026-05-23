@@ -321,17 +321,24 @@
 </div>
 
 <script>
-  // ── config ─────────────────────────────────────────────
-  const API = 'http://localhost:8000'  // change to your Render URL after deploy
+  // DEPLOY: change this to your Render URL before deploying
+  const API = 'http://localhost:8000'
   let token = localStorage.getItem('token')
   let selectedFile = null
 
-  // ── init ───────────────────────────────────────────────
+  const originalFetch = window.fetch;
+  window.fetch = async (...args) => {
+    const response = await originalFetch(...args);
+    if (response.status === 401 && !args[0].includes('/auth/login')) {
+      logout();
+    }
+    return response;
+  };
+
   window.onload = () => {
     if (token) showUploadBox()
   }
 
-  // ── auth ───────────────────────────────────────────────
   function switchTab(tab) {
     document.getElementById('loginForm').style.display    = tab === 'login'    ? '' : 'none'
     document.getElementById('registerForm').style.display = tab === 'register' ? '' : 'none'
@@ -375,14 +382,11 @@
       body: JSON.stringify({ full_name: name, email, password: pass })
     })
 
-    const data = await res.json()
     if (!res.ok) {
       document.getElementById('registerError').textContent =
         data.detail || 'Registration failed'
       return
     }
-
-    // auto login after register
     document.getElementById('loginEmail').value    = email
     document.getElementById('loginPassword').value = pass
     switchTab('login')
@@ -407,7 +411,6 @@
     document.getElementById('userBadge').style.display = ''
   }
 
-  // ── file handling ──────────────────────────────────────
   function handleFile(input) {
     const file = input.files[0]
     if (!file) return
@@ -418,7 +421,6 @@
     document.getElementById('analyzeBtn').disabled = false
   }
 
-  // drag and drop
   const drop = document.getElementById('fileDrop')
   drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover') })
   drop.addEventListener('dragleave', () => drop.classList.remove('dragover'))
@@ -434,7 +436,6 @@
     }
   })
 
-  // ── main flow ──────────────────────────────────────────
   async function uploadAndAnalyze() {
     if (!selectedFile) return
 
@@ -449,7 +450,6 @@
     document.getElementById('analyzeBtn').disabled = true
     setStatus('Uploading resume...')
 
-    // step 1 — upload
     const form = new FormData()
     form.append('file', selectedFile)
     form.append('job_description', jd)
@@ -469,11 +469,9 @@
       return
     }
 
-    const uploadData = await uploadRes.json()
     const resumeId = uploadData.resume_id
     setStatus('Running AI analysis (this takes 15-30 seconds on first run)...')
 
-    // step 2 — full analysis
     const analysisRes = await fetch(`${API}/resume/${resumeId}/full-analysis`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` }
@@ -497,13 +495,11 @@
     document.getElementById('uploadBox').style.display  = 'none'
     document.getElementById('resultsBox').style.display = ''
 
-    // scores
     setScore('finalScore',    data.scores.final_score)
     setScore('tfidfScore',    data.scores.tfidf_score)
     setScore('semanticScore', data.scores.semantic_score)
     document.getElementById('interpretation').textContent = data.scores.interpretation
 
-    // keywords
     const matched = document.getElementById('matchedKeywords')
     matched.innerHTML = (data.keywords.matched || [])
       .map(k => `<span class="tag green">${k}</span>`).join('') || '<span style="color:#64748b">None found</span>'
@@ -512,7 +508,6 @@
     missing.innerHTML = (data.keywords.missing || [])
       .map(k => `<span class="tag red">${k}</span>`).join('') || '<span style="color:#64748b">None — great match!</span>'
 
-    // suggestions
     const sug = document.getElementById('suggestions')
     sug.innerHTML = (data.suggestions || []).map(s => `
       <div class="suggestion">
@@ -521,7 +516,6 @@
       </div>
     `).join('') || '<span style="color:#64748b">No suggestions generated</span>'
 
-    // similar jobs
     const jobs = document.getElementById('similarJobs')
     jobs.innerHTML = (data.similar_jobs || []).map(j => `
       <div class="job-card">
