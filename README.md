@@ -124,10 +124,6 @@ Powered by:
 
 ![Dashboard](docs/images/dashboard.png)
 
-### Analysis Results
-
-![Results](docs/images/results.png)
-
 > Replace image paths with your actual screenshots.
 
 ---
@@ -383,13 +379,13 @@ https://shaikhhajisab.github.io/resume-analyzer-web/
 
 ### Backend
 
-Add your Render backend URL here.
+https://resume-analyzer-web-1.onrender.com/
 
 ---
 
 ## 👨‍💻 Author
 
-### Haji Shaikh
+### Shaikh Hajisab
 
 Final Year B.Tech (Artificial Intelligence & Data Science)
 
@@ -404,8 +400,8 @@ Passionate about:
 **GitHub:**  
 https://github.com/shaikhHajisab
 
-**LinkedIn:**  
-Add Your LinkedIn URL
+**LinkedIn:**
+https://www.linkedin.com/in/shaikhhajisab/
 
 ---
 
